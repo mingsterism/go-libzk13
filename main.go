@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/twingdev/go-libzk13/zkp"
 	"log"
 	"math/big"
 	"net/http"
@@ -10,6 +9,8 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+
+	"github.com/mingsterism/go-libzk13/zkp"
 )
 
 func main() {

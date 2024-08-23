@@ -1,4 +1,4 @@
-module github.com/twingdev/go-libzk13
+module github.com/mingsterism/go-libzk13
 
 go 1.22.1
 
