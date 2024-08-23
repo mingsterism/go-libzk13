@@ -3,14 +3,16 @@ package zkp
 import (
 	"crypto/rand"
 	"fmt"
-	"github.com/zeebo/blake3"
 	"math/big"
+
+	"github.com/zeebo/blake3"
 )
 
 const PubKeyRange = 2044 // Size of k, ensure the range is suitable
 
 type ZK13 struct {
 	p, g, q, Hs *big.Int
+	usedNonces  map[string]bool
 }
 
 // NewZK13 initializes the ZK13 structure with a prime number, generator, and hashed secret.
@@ -42,6 +44,8 @@ func NewZK13(secretBaggage string, bits int) *ZK13 {
 	hash := blake3.Sum512([]byte(secretBaggage))
 	Hs := new(big.Int).SetBytes(hash[:])
 	z.Hs = Hs
+	z.usedNonces = make(map[string]bool)
+
 	return z
 }
 
@@ -55,10 +59,12 @@ func (z *ZK13) Prover(nonce *big.Int) (*Proof, error) {
 		return nil, err
 	}
 	r := new(big.Int).Exp(z.g, k, z.p) // r = g^k mod p
-	F := new(big.Int).Mul(z.Hs, k)     // F = Hs*k
-	pMinusOne := new(big.Int).Sub(z.p, big.NewInt(1))
-	F.Mod(F, pMinusOne)                // F = Hs*k mod (p-1)
-	P := new(big.Int).Exp(z.g, F, z.p) // P = g^F mod p
+
+	// Calculate P
+	P := new(big.Int).Exp(z.g, nonce, z.p)
+	P.Mul(P, new(big.Int).Exp(z.Hs, r, z.p))
+	P.Mod(P, z.p)
+
 	proof := &Proof{
 		R:     r,
 		P:     P,
@@ -67,24 +73,51 @@ func (z *ZK13) Prover(nonce *big.Int) (*Proof, error) {
 	return proof, nil
 }
 
-// Verifier checks if the provided proof (r, P, nonce) is valid  Verifier checks the proof using constant-time comparison
 func (z *ZK13) Verifier(proof *Proof) bool {
-	// Calculate expected value of r
-	expectedR := new(big.Int).Exp(z.g, proof.Nonce, z.p)
-	expectedR.Mul(expectedR, new(big.Int).Exp(z.Hs, proof.R, z.p))
-	expectedR.Mod(expectedR, z.p)
+	fmt.Println("Debug Info in Verifier:")
+	fmt.Printf("proof.Nonce: %s\n", proof.Nonce)
+	fmt.Printf("z.p: %s\n", z.p)
+	fmt.Printf("z.g: %s\n", z.g)
+	fmt.Printf("z.Hs: %s\n", z.Hs)
+	fmt.Printf("proof.R: %s\n", proof.R)
+	fmt.Printf("proof.P: %s\n", proof.P)
 
-	// Check that r matches expected value
-	if proof.P.Cmp(expectedR) != 0 {
+	// Check for nonce reuse
+	nonceStr := proof.Nonce.String()
+	if z.usedNonces[nonceStr] {
+		fmt.Println("Verification failed: Nonce reuse detected")
+		return false
+	}
+
+	// Calculate expected value of P
+	expectedP := new(big.Int).Exp(z.g, proof.Nonce, z.p)
+	fmt.Printf("Initial expectedP: %s\n", expectedP)
+
+	temp := new(big.Int).Exp(z.Hs, proof.R, z.p)
+	expectedP.Mul(expectedP, temp)
+	expectedP.Mod(expectedP, z.p)
+	fmt.Printf("Final expectedP: %s\n", expectedP)
+
+	// Check that P matches expected value
+	if proof.P.Cmp(expectedP) != 0 {
+		fmt.Println("Verification failed: proof.P != expectedP")
 		return false
 	}
 
 	// Check that nonce is valid
+	fmt.Println("Checking nonce validity")
+	fmt.Printf("Nonce: %s\n", proof.Nonce)
+	fmt.Printf("1 < Nonce: %v\n", proof.Nonce.Cmp(big.NewInt(1)) > 0)
+	fmt.Printf("Nonce < q: %v\n", proof.Nonce.Cmp(z.q) < 0)
 	if proof.Nonce.Cmp(big.NewInt(1)) <= 0 || proof.Nonce.Cmp(z.q) >= 0 {
+		fmt.Println("Verification failed: Invalid nonce")
 		return false
 	}
 
-	// Proof is valid
+	// Mark nonce as used
+	z.usedNonces[nonceStr] = true
+
+	fmt.Println("Verification passed")
 	return true
 }
 
@@ -113,8 +146,15 @@ func (z *ZK13) CalculateP(F *big.Int) *big.Int {
 }
 
 func (z *ZK13) GenerateNonce() *big.Int {
-	b, _ := randBigInt(z.p)
-	return b
+	for {
+		nonce, err := rand.Int(rand.Reader, z.q)
+		if err != nil {
+			continue
+		}
+		if nonce.Cmp(big.NewInt(1)) > 0 && nonce.Cmp(z.q) < 0 {
+			return nonce
+		}
+	}
 }
 
 // randBigInt generates a random big integer within a specified range.
